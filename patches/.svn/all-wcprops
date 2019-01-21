@@ -1,0 +1,17 @@
+K 25
+svn:wc:ra_dav:version-url
+V 44
+/repos/hwdb/!svn/ver/53/trunk/kernel/patches
+END
+actions.c
+K 25
+svn:wc:ra_dav:version-url
+V 54
+/repos/hwdb/!svn/ver/53/trunk/kernel/patches/actions.c
+END
+Modules.mk
+K 25
+svn:wc:ra_dav:version-url
+V 55
+/repos/hwdb/!svn/ver/53/trunk/kernel/patches/Modules.mk
+END

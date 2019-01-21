@@ -1,0 +1,16 @@
+Given OVS, the openvswitch directory, create and apply patches for 
+
+a) OVS/datapath/actions.c
+
+b) OVS/datapath/linux-2.6/Modules.mk
+
+as follows:
+
+$ diff -u <original file> <modified file>  > mypatch.patch
+
+$ patch < mypatch.patch
+
+To reverse the patch,
+
+$ patch -R < mypatch.patch
+

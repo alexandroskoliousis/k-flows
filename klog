@@ -1,0 +1,215 @@
+#!/bin/bash
+#
+USAGE="usage: klog [make (ovs <ovs dir>|alone) (verbose|silent), start <path>, stop]"
+#
+# Description
+#
+# `klog make`, defaulting to `alone` and `silent`, builds a standalone module.
+# For openvswitch support, type `klog make ovs <ovs dir>`.
+# 
+# <ovs dir> points to the ovs directory.
+#
+# The last argument of `klog make` is always either `verbose` or `silent`. 
+#
+# Once either module is compiled, load it with `klog start`. 
+#
+# If compiled with openvswitch, start with
+# `klog start <ovs dir>/datapath/linux`, i.e. the path to the module.
+#
+# Unload it with
+# `klog stop`.
+#
+# In summary:
+#
+# a) For a stand-alone version,
+#
+# $ sudo klog make
+# $ sudo klog start
+#
+# b) For a version compatible with openvswitch 1.2.1 (cf. homework at 
+#    github),
+#
+# $ sudo klog make ovs $HOME/homework/openvswitch.git
+# $ sudo klog start $HOME/homework/openvswitch.git/datapath/linux
+#
+VERBOSE=false
+
+klog_perror () {
+
+	[ -z "$1" ] && echo "error" || echo "$@"
+	exit 1
+}
+
+klog_conf_log () {
+	
+	[ ! -e "debug.h" ] && klog_perror "debug.h not found"
+	
+	if [ \( "$1" != "silent" \) -a \( "$1" != "verbose" \) ]; then
+		return 1
+	fi
+
+	# edit debug.h
+	rm -f debug.tmp
+	next=false
+	tf="debug.tmp"
+	while read line; do
+
+		if $next; then
+			if [ "$1" == "silent" ]; then
+				echo "#undef HWDB_VERBOSE"  >> $tf
+			else
+				echo "#define HWDB_VERBOSE" >> $tf
+			fi
+			next=false
+		else
+			echo "$line" >> $tf
+		fi
+		[ "$line" = "/*klog:var:log*/" ] && next=false
+	
+	done < debug.h
+	[ ! -f $tf ] && return 1
+	mv $tf debug.h
+	return 0
+}
+
+klog_have_ovs () {
+	
+	[ ! -e "klogger.h" ] && klog_perror "klogger.h not found"
+
+	# edit klogger.h
+	rm -f klogger.tmp
+	next=false
+	tf="klogger.tmp"
+	while read line; do
+
+		if $next; then
+			if ! $1; then
+				echo "#undef OVS_HWDB"  >> $tf
+			else
+				echo "#define OVS_HWDB" >> $tf
+			fi
+			next=false
+		else
+			echo "$line" >> $tf
+		fi
+		[ "$line" = "/*klog:var:ovs*/" ] && next=true
+		
+	done < klogger.h
+	[ ! -f $tf ] && return 1 
+	mv $tf klogger.h
+	return 0
+}
+
+klog_conf_ovs () {
+
+	OVS=$1
+
+	actions=$OVS/datapath/actions.c
+	modules=$OVS/datapath/linux/Modules.mk
+
+	[ ! -e "$actions" ] && klog_perror "$actions not found"
+	[ ! -e "$modules" ] && klog_perror "$modules not found"
+	
+	t=`pwd`
+	
+	diff $t/patches/actions.c $actions &>/dev/null
+	if [ $? -eq 1 ]; then
+		cp $actions ${actions}.orig
+		$VERBOSE && echo "$actions => ${actions}.orig"
+		cp $t/patches/actions.c $actions
+		$VERBOSE && echo "$t/patches/actions.c => $actions"
+	fi
+	
+	diff $t/patches/Modules.mk $modules &>/dev/null
+	if [ $? -eq 1 ]; then 
+		cp $modules ${modules}.orig
+		$VERBOSE && echo "$modules => ${modules}.orig"
+		cp $t/patches/Modules.mk $modules
+		$VERBOSE && echo "$t/patches/Modules.mk => $modules"
+	fi
+	
+	# cp files
+	cp klogger.* hashtable.* hwdbflow.* khwdb.h debug.h \
+$OVS/datapath/linux/
+	# make
+	cd $OVS/datapath/
+	make
+	cd $t
+}
+
+[ $# -eq 0 ] && klog_perror $USAGE
+$VERBOSE && echo "[args] $@"
+
+action="$1"
+case "$action" in
+"make")
+[ $# -eq 1 ] && klog_perror $USAGE
+shift 1
+$VERBOSE && echo "[args] $@"
+[ $# -lt 2 ] && klog_perror $USAGE
+# There is at least a second argument
+if [ "$1" == "alone" ]; then
+	make clean
+	klog_have_ovs false
+	klog_conf_log "$2" || klog_perror $USAGE
+	make
+	exit $? # done
+elif [ "$1" == "ovs" ]; then
+	shift 1
+	$VERBOSE && echo "[args] $@"
+	[ $# -ne 2 ] && klog_perror $USAGE
+	# Next argument is a directory
+	[ ! -d "$1" ] && klog_perror $USAGE
+	make clean
+	klog_have_ovs true
+	klog_conf_log "$2" || klog_perror $USAGE
+	klog_conf_ovs "$1"
+	exit $? # done
+else
+	plog_error $USAGE
+fi
+;;
+"start")
+DIR=
+MOD="klogger"
+[ $# -eq 2 ] && DIR=$2
+if [ -n $DIR ]; then
+	[ ! -d $DIR ] && klog_perror "$DIR not found"
+	MOD="$DIR/klogger_mod"
+fi
+/sbin/insmod $MOD.ko || klog_perror "failed to load $DIR/$MOD.ko"
+# retrieve major number
+major=$(awk "\$2==\"hwdb\" {print \$1}" /proc/devices)
+$VERBOSE && echo "hwdb's major number $major"
+# remove stale nodes
+rm -f /dev/hwdb[0-3]
+# klogger has four devices
+mknod /dev/hwdb0 c $major 0
+mknod /dev/hwdb1 c $major 1
+mknod /dev/hwdb2 c $major 2
+mknod /dev/hwdb3 c $major 3
+ln -sf hwdb0 /dev/hwdb
+if grep -q '^staff:' /etc/group; then
+	group="staff"
+else
+	group="wheel"
+fi
+chgrp $group /dev/hwdb[0-3] 
+chmod 667 /dev/hwdb[0-3] # or 664
+exit 0
+;;
+"stop")
+MOD="klogger"
+/sbin/lsmod | grep klogger_mod &>/dev/null
+[ $? -eq 0 ] && MOD="klogger_mod"
+/sbin/rmmod $MOD 2>/dev/null || klog_perror "$MOD not loaded"
+rm -f /dev/hwdb /dev/hwdb[0-3]
+exit 0
+;;
+*)
+klog_perror $USAGE
+;;
+esac
+
+exit 1
+
